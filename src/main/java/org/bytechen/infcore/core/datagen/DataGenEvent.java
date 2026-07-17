@@ -23,5 +23,10 @@ public final class DataGenEvent {
                 event.includeServer(),
                 new EvolutionDataProvider(packOutput)
         );
+
+        event.getGenerator().addProvider(
+                event.includeServer(),
+                new BlockSpreadDataProvider(packOutput)
+        );
     }
 }

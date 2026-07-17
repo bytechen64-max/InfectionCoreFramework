@@ -19,3 +19,14 @@ hs_err_pid*
 
 # Common working directory
 run
+run-data
+
+# Claude Code
+.claude/
+
+# Logs
+logs/
+*.log
+
+# Nested project copy (build artifact)
+InfectionCoreFramework/

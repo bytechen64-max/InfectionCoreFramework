@@ -10,6 +10,8 @@ import net.minecraftforge.network.NetworkEvent;
 import org.bytechen.infcore.core.capability.AbstractCapability;
 import org.bytechen.infcore.core.capability.CapabilityRegistry;
 import org.bytechen.infcore.core.network.PacketSyncCapability;
+import org.bytechen.infcore.core.network.PacketSyncWorldData;
+import org.bytechen.infcore.core.worlddata.WorldDataRegistry;
 
 /**
  * 客户端数据包处理器。
@@ -28,6 +30,7 @@ public final class ClientPacketHandlers {
      */
     public static void init() {
         PacketSyncCapability.CLIENT_HANDLER = ClientPacketHandlers::handleSyncCapability;
+        PacketSyncWorldData.CLIENT_HANDLER = ClientPacketHandlers::handleSyncWorldData;
     }
 
     /**
@@ -50,5 +53,18 @@ public final class ClientPacketHandlers {
                 absCap.readSyncData(packet.getSyncData());
             }
         });
+    }
+
+    /**
+     * 处理世界数据同步包。
+     * <p>
+     * 将服务端推送的世界数据缓存到 {@link WorldDataRegistry} 的客户端存储中。
+     * 下游模组通过 {@link WorldDataRegistry#getClientData} 读取。
+     */
+    private static void handleSyncWorldData(PacketSyncWorldData packet, NetworkEvent.Context context) {
+        WorldDataRegistry.putClientData(
+                packet.getDimension(),
+                packet.getWorldDataId(),
+                packet.getData());
     }
 }

@@ -32,6 +32,8 @@ public final class NetworkHelper {
     public static void register() {
         NETWORK.registerMessage(packetId++, PacketSyncCapability.class,
                 PacketSyncCapability::encode, PacketSyncCapability::decode, PacketSyncCapability::handle);
+        NETWORK.registerMessage(packetId++, PacketSyncWorldData.class,
+                PacketSyncWorldData::encode, PacketSyncWorldData::decode, PacketSyncWorldData::handle);
     }
 
     /**
