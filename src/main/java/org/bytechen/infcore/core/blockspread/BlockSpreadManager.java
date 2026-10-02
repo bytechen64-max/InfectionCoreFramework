@@ -3,18 +3,20 @@ package org.bytechen.infcore.core.blockspread;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.resources.ResourceLocation;
-import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.fml.ModList;
 import net.minecraftforge.forgespi.language.IModInfo;
 import net.minecraftforge.registries.ForgeRegistries;
+import org.bytechen.infcore.api.block.ISpreadBlock;
+import org.bytechen.infcore.api.event.BlockSpreadEvent;
 import org.bytechen.infcore.core.Infcore;
+import org.bytechen.infcore.core.util.ThrottledLogger;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.Reader;
@@ -37,6 +39,8 @@ import java.util.stream.Stream;
  * 主要 API：
  * <ul>
  *   <li>{@link #applySpread(Level, BlockPos, ResourceLocation)} —— 对方块应用指定类型的扩散</li>
+ *   <li>{@link #applySpread(Level, BlockPos, BlockState, ResourceLocation)} —— 对方块状态应用扩散</li>
+ *   <li>{@link #applySpread(Level, BlockPos, ISpreadBlock)} —— 对实现 ISpreadBlock 的方块自动获取类型</li>
  *   <li>{@link #hasSpreadRule(BlockState, ResourceLocation)} —— 检查方块状态是否存在扩散规则</li>
  *   <li>{@link #hasSpreadRule(Block, ResourceLocation)} —— 检查方块是否存在扩散规则</li>
  * </ul>
@@ -45,6 +49,13 @@ public final class BlockSpreadManager {
 
     public static final Gson GSON = new GsonBuilder().create();
     private static final String BLOCKSPREAD_DATA_PATH = "infcore_blockspread";
+
+    /**
+     * 扩散明细日志节流器：逐方块明细默认进 TRACE，每 30 秒最多汇总一条 DEBUG。
+     * 感染爆发时扩散每秒可达上百次，逐条打印会刷爆 debug.log。
+     */
+    private static final ThrottledLogger SPREAD_LOG =
+            new ThrottledLogger(Infcore.LOGGER, "BlockSpreadManager");
 
     /**
      * type -> sourceBlock -> BlockSpreadEntry
@@ -80,6 +91,20 @@ public final class BlockSpreadManager {
     }
 
     /**
+     * 对实现 {@link ISpreadBlock} 接口的方块应用扩散。
+     * 自动从方块实例获取扩散类型，无需手动指定。
+     *
+     * @param level 世界
+     * @param pos   要扩散的方块位置
+     * @param block 实现了 ISpreadBlock 的方块实例
+     * @return 是否成功扩散
+     */
+    public static boolean applySpread(Level level, BlockPos pos, ISpreadBlock block) {
+        if (level == null || pos == null || block == null) return false;
+        return applySpread(level, pos, block.getSpreadType());
+    }
+
+    /**
      * 检查方块状态是否存在指定类型的扩散规则。
      */
     public static boolean hasSpreadRule(BlockState state, ResourceLocation type) {
@@ -96,6 +121,18 @@ public final class BlockSpreadManager {
         Map<ResourceLocation, BlockSpreadEntry> typeMap = SPREAD_MAP.get(type);
         if (typeMap == null) return false;
         return typeMap.containsKey(ForgeRegistries.BLOCKS.getKey(block));
+    }
+
+    /**
+     * 检查方块状态是否存在任意由 ISpreadBlock 定义的扩散规则。
+     * 当 state 的 Block 实现了 ISpreadBlock 时，使用其自身类型查询。
+     */
+    public static boolean hasSpreadRule(BlockState state) {
+        if (state == null) return false;
+        if (state.getBlock() instanceof ISpreadBlock spreadBlock) {
+            return hasSpreadRule(state, spreadBlock.getSpreadType());
+        }
+        return false;
     }
 
     /**
@@ -145,17 +182,14 @@ public final class BlockSpreadManager {
         if (state.isAir()) return false;
 
         ResourceLocation sourceKey = ForgeRegistries.BLOCKS.getKey(state.getBlock());
-        Infcore.LOGGER.debug("BlockSpreadManager: applySpread type='{}' for '{}' at {}", type, sourceKey, pos);
 
         Map<ResourceLocation, BlockSpreadEntry> typeMap = SPREAD_MAP.get(type);
         if (typeMap == null) {
-            Infcore.LOGGER.debug("BlockSpreadManager: no entries for type '{}'", type);
             return false;
         }
 
         BlockSpreadEntry entry = typeMap.get(sourceKey);
         if (entry == null || entry.results() == null || entry.results().isEmpty()) {
-            Infcore.LOGGER.debug("BlockSpreadManager: no targets for '{}' under type '{}'", sourceKey, type);
             return false;
         }
 
@@ -173,6 +207,13 @@ public final class BlockSpreadManager {
 
         BlockState targetState = targetBlock.defaultBlockState();
 
+        // 扩散前事件（可取消）
+        BlockSpreadEvent.Pre preEvent = new BlockSpreadEvent.Pre(level, pos, state, targetState, type);
+        if (MinecraftForge.EVENT_BUS.post(preEvent)) {
+            SPREAD_LOG.record("spread cancelled by event at {}", pos);
+            return false;
+        }
+
         // 根据配置决定是否掉落资源
         if (entry.dropResources()) {
             Block.dropResources(state, level, pos, null, null, ItemStack.EMPTY);
@@ -180,14 +221,10 @@ public final class BlockSpreadManager {
 
         level.setBlock(pos, targetState, Block.UPDATE_ALL_IMMEDIATE);
 
-        // 粒子效果
-        if (level instanceof ServerLevel serverLevel) {
-            serverLevel.sendParticles(ParticleTypes.EXPLOSION,
-                    pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5,
-                    1, 0, 0, 0, 0.05);
-        }
+        // 扩散后事件（不可取消）
+        MinecraftForge.EVENT_BUS.post(new BlockSpreadEvent.Post(level, pos, state, targetState, type));
 
-        Infcore.LOGGER.debug("BlockSpreadManager: '{}' spread to '{}' at {} (type={})",
+        SPREAD_LOG.record("'{}' spread to '{}' at {} (type={})",
                 sourceKey, chosen.target(), pos, type);
         return true;
     }
@@ -324,7 +361,7 @@ public final class BlockSpreadManager {
                 }
 
                 typeMap.put(srcKey, entry);
-                Infcore.LOGGER.debug("BlockSpreadManager: parsed [{}] {} -> {} targets",
+                Infcore.LOGGER.trace("BlockSpreadManager: parsed [{}] {} -> {} targets",
                         entry.type(), srcKey, entry.results().size());
             }
         } catch (Exception e) {

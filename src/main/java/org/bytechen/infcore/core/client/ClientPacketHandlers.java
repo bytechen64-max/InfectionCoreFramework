@@ -9,7 +9,9 @@ import net.minecraftforge.common.capabilities.Capability;
 import net.minecraftforge.network.NetworkEvent;
 import org.bytechen.infcore.core.capability.AbstractCapability;
 import org.bytechen.infcore.core.capability.CapabilityRegistry;
+import org.bytechen.infcore.core.difficulty.DifficultyHelper;
 import org.bytechen.infcore.core.network.PacketSyncCapability;
+import org.bytechen.infcore.core.network.PacketSyncDifficulty;
 import org.bytechen.infcore.core.network.PacketSyncWorldData;
 import org.bytechen.infcore.core.worlddata.WorldDataRegistry;
 
@@ -31,6 +33,7 @@ public final class ClientPacketHandlers {
     public static void init() {
         PacketSyncCapability.CLIENT_HANDLER = ClientPacketHandlers::handleSyncCapability;
         PacketSyncWorldData.CLIENT_HANDLER = ClientPacketHandlers::handleSyncWorldData;
+        PacketSyncDifficulty.CLIENT_HANDLER = ClientPacketHandlers::handleSyncDifficulty;
     }
 
     /**
@@ -66,5 +69,14 @@ public final class ClientPacketHandlers {
                 packet.getDimension(),
                 packet.getWorldDataId(),
                 packet.getData());
+    }
+
+    /**
+     * 处理难度同步数据包。
+     * <p>
+     * 将服务端推送的全局难度写入客户端缓存。
+     */
+    private static void handleSyncDifficulty(PacketSyncDifficulty packet, NetworkEvent.Context context) {
+        DifficultyHelper.setClientDifficulty(packet.getDifficulty());
     }
 }
